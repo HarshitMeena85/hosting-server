@@ -44,7 +44,12 @@ app.get('/track/:emailId/:timestamp?/:random?', (req, res) => {
         isGmailProxy: userAgent.includes('GoogleImageProxy') || userAgent.includes('Google')
     };
     
+    const isGmailClient = userAgent.includes('Gmail') || userAgent.includes('GoogleImageProxy') || userAgent.includes('Mozilla') && referrer.includes('mail.google.com');
+
+if (!isGmailClient) {
     fs.appendFileSync(TRACKING_LOG_FILE, JSON.stringify(logEntry) + '\n');
+}
+
     
     // Return tracking pixel
     const pixel = Buffer.from(
