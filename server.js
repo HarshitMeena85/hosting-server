@@ -5,70 +5,66 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Use .txt file for tracking data
-const TRACKING_DATA_FILE = 'tracklog.txt';
+// Enhanced logging for debugging
+const TRACKING_LOG_FILE = 'tracklog.txt';
 
-function loadTrackingData() {
-    try {
-        if (fs.existsSync(TRACKING_DATA_FILE)) {
-            const content = fs.readFileSync(TRACKING_DATA_FILE, 'utf8');
-            const lines = content.split('\n').filter(line => line.trim());
-            const trackingData = {};
-            
-            lines.forEach(line => {
-                try {
-                    // Each line is a JSON object
-                    const data = JSON.parse(line);
-                    if (!trackingData[data.emailId]) {
-                        trackingData[data.emailId] = {
-                            id: data.emailId,
-                            opens: [],
-                            firstOpened: null,
-                            totalOpens: 0
-                        };
-                    }
-                    trackingData[data.emailId].opens.push({
-                        timestamp: data.timestamp,
-                        userAgent: data.userAgent,
-                        ip: data.ip,
-                        isGmailProxy: data.isGmailProxy
-                    });
-                    trackingData[data.emailId].totalOpens++;
-                    if (!trackingData[data.emailId].firstOpened) {
-                        trackingData[data.emailId].firstOpened = data.timestamp;
-                    }
-                } catch (e) {
-                    // Skip invalid lines
-                }
-            });
-            return trackingData;
-        }
-    } catch (error) {
-        console.error('Error loading tracking data:', error);
-    }
-    return {};
-}
-
-function appendTrackingData(emailId, openRecord) {
-    try {
-        const logEntry = {
-            emailId: emailId,
-            timestamp: openRecord.timestamp,
-            userAgent: openRecord.userAgent,
-            ip: openRecord.ip,
-            isGmailProxy: openRecord.isGmailProxy
-        };
-        
-        const logLine = JSON.stringify(logEntry) + '\n';
-        fs.appendFileSync(TRACKING_DATA_FILE, logLine);
-    } catch (error) {
-        console.error('Error saving tracking data:', error);
-    }
+function logDetailedRequest(req, emailId) {
+    const timestamp = new Date().toISOString();
+    const userAgent = req.get('User-Agent') || '';
+    const referrer = req.get('Referer') || req.get('Referrer') || '';
+    const xForwardedFor = req.get('X-Forwarded-For');
+    const realIp = xForwardedFor ? xForwardedFor.split(',')[0] : req.ip;
+    const acceptLanguage = req.get('Accept-Language') || '';
+    const acceptEncoding = req.get('Accept-Encoding') || '';
+    
+    // Detect Gmail proxy
+    const isGmailProxy = userAgent.includes('GoogleImageProxy') || 
+                        userAgent.includes('Google') ||
+                        referrer.includes('googleusercontent.com');
+    
+    // Detect other email clients
+    const isOutlookProxy = userAgent.includes('Microsoft') || referrer.includes('outlook');
+    const isAppleProxy = userAgent.includes('Apple') || userAgent.includes('Mail');
+    
+    const logData = {
+        timestamp,
+        emailId,
+        ip: realIp,
+        userAgent,
+        referrer,
+        acceptLanguage,
+        acceptEncoding,
+        isGmailProxy,
+        isOutlookProxy,
+        isAppleProxy,
+        headers: JSON.stringify(req.headers)
+    };
+    
+    // Log to file
+    const logLine = JSON.stringify(logData) + '\n';
+    fs.appendFileSync(TRACKING_LOG_FILE, logLine);
+    
+    // Enhanced console logging
+    console.log('═══════════════════════════════════════');
+    console.log(`📧 EMAIL TRACKING EVENT`);
+    console.log(`Email ID: ${emailId}`);
+    console.log(`Timestamp: ${timestamp}`);
+    console.log(`IP Address: ${realIp}`);
+    console.log(`User-Agent: ${userAgent}`);
+    console.log(`Referrer: ${referrer}`);
+    console.log(`Gmail Proxy: ${isGmailProxy ? 'YES' : 'NO'}`);
+    console.log(`Outlook Proxy: ${isOutlookProxy ? 'YES' : 'NO'}`);
+    console.log(`Apple Proxy: ${isAppleProxy ? 'YES' : 'NO'}`);
+    console.log(`Accept-Language: ${acceptLanguage}`);
+    console.log('═══════════════════════════════════════');
+    
+    return logData;
 }
 
 app.use(express.json());
 app.use(express.static('public'));
 
+// CORS headers
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -76,32 +72,38 @@ app.use((req, res, next) => {
     next();
 });
 
-// Main tracking endpoint
+// Enhanced tracking endpoint with multiple path formats
 app.get('/track/:emailId/:timestamp?/:random?', (req, res) => {
     const emailId = req.params.emailId;
-    const timestamp = req.params.timestamp || Date.now();
-    const userAgent = req.get('User-Agent') || '';
-    const referrer = req.get('Referer') || req.get('Referrer') || '';
-    const realIp = req.get('X-Forwarded-For') ? req.get('X-Forwarded-For').split(',')[0] : req.ip;
     
-    // Create open record
-    const openRecord = {
-        timestamp: new Date().toISOString(),
-        userAgent: userAgent,
-        referrer: referrer,
-        ip: realIp,
-        isGmailProxy: userAgent.includes('GoogleImageProxy') || userAgent.includes('Google')
-    };
+    // Log all request details
+    const logData = logDetailedRequest(req, emailId);
     
-    // Append to .txt file
-    appendTrackingData(emailId, openRecord);
+    // Create tracking pixel with anti-cache headers
+    const pixel = Buffer.from(
+        'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+        'base64'
+    );
     
-    console.log(`📧 Email opened: ${emailId} at ${openRecord.timestamp}`);
-    console.log(`User-Agent: ${userAgent}`);
-    console.log(`Is Gmail Proxy: ${openRecord.isGmailProxy}`);
-    console.log('---');
+    res.set({
+        'Content-Type': 'image/gif',
+        'Content-Length': pixel.length,
+        'Cache-Control': 'no-cache, no-store, must-revalidate, private',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Last-Modified': new Date().toUTCString(),
+        'ETag': `"${emailId}-${Date.now()}"`,
+        'Access-Control-Allow-Origin': '*'
+    });
     
-    // Return tracking pixel
+    res.send(pixel);
+});
+
+// Legacy endpoint
+app.get('/track/:emailId', (req, res) => {
+    const emailId = req.params.emailId;
+    logDetailedRequest(req, emailId);
+    
     const pixel = Buffer.from(
         'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
         'base64'
@@ -118,44 +120,52 @@ app.get('/track/:emailId/:timestamp?/:random?', (req, res) => {
     res.send(pixel);
 });
 
-// API endpoint to check email status
-app.get('/api/email/:emailId/status', (req, res) => {
+// Debug endpoint to view tracking logs
+app.get('/debug/logs/:emailId?', (req, res) => {
     const emailId = req.params.emailId;
-    const trackingData = loadTrackingData();
     
-    if (trackingData[emailId]) {
+    try {
+        if (fs.existsSync(TRACKING_LOG_FILE)) {
+            const content = fs.readFileSync(TRACKING_LOG_FILE, 'utf8');
+            const lines = content.split('\n').filter(line => line.trim());
+            
+            let logs = lines.map(line => {
+                try {
+                    return JSON.parse(line);
+                } catch (e) {
+                    return null;
+                }
+            }).filter(log => log !== null);
+            
+            // Filter by emailId if provided
+            if (emailId) {
+                logs = logs.filter(log => log.emailId === emailId);
+            }
+            
+            res.json({
+                success: true,
+                count: logs.length,
+                logs: logs.slice(-50) // Last 50 entries
+            });
+        } else {
+            res.json({
+                success: true,
+                count: 0,
+                logs: [],
+                message: 'No tracking log file found'
+            });
+        }
+    } catch (error) {
         res.json({
-            success: true,
-            emailId: emailId,
-            opened: trackingData[emailId].totalOpens > 0,
-            openCount: trackingData[emailId].totalOpens,
-            firstOpened: trackingData[emailId].firstOpened,
-            lastOpened: trackingData[emailId].opens.length > 0 ? 
-                       trackingData[emailId].opens[trackingData[emailId].opens.length - 1].timestamp : null
-        });
-    } else {
-        res.json({
-            success: true,
-            emailId: emailId,
-            opened: false,
-            openCount: 0,
-            firstOpened: null,
-            lastOpened: null
+            success: false,
+            error: error.message
         });
     }
 });
 
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        timestamp: new Date().toISOString(),
-        port: port 
-    });
-});
-
 app.listen(port, '0.0.0.0', () => {
-    console.log(`🚀 Email tracker server running on port ${port}`);
-    console.log(`📍 Tracking endpoint: /track/:emailId/:timestamp/:random`);
-    console.log(`📍 Status API: /api/email/:emailId/status`);
-    console.log(`📁 Tracking data file: ${TRACKING_DATA_FILE}`);
+    console.log(`🚀 Enhanced Email Tracker Server running on port ${port}`);
+    console.log(`📍 Tracking endpoint: /track/:emailId`);
+    console.log(`📍 Debug endpoint: /debug/logs/:emailId`);
+    console.log(`📁 Log file: ${TRACKING_LOG_FILE}`);
 });
